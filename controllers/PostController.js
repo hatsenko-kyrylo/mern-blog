@@ -1,28 +1,22 @@
 import PostModel from '../models/Post.js';
 import UserModel from '../models/User.js';
+import CommentModel from '../models/Comment.js';
 
 export const addComment = async (req, res) => {
     try {
         const postId = req.params.postId;
         const user = await UserModel.findById(req.userId);
 
-        const newComment = {
+        const newComment = new CommentModel({
             text: req.body.text,
-            user: {
-                userId: user._id,
-                fullName: user.fullName,
-                avatarUrl: user.avatarUrl,
-            },
-        };
+            user: user._id,
+        });
 
-        await PostModel.updateOne(
-            {
-                _id: postId,
-            },
-            {
-                $push: { comments: newComment },
-            }
-        );
+        const savedComment = await newComment.save();
+
+        await PostModel.findByIdAndUpdate(postId, {
+            $push: { comments: savedComment._id },
+        });
         res.json({
             success: true,
         });
@@ -36,16 +30,17 @@ export const addComment = async (req, res) => {
 
 export const getLastComments = async (req, res) => {
     try {
-        const posts = await PostModel.find()
+        const allComments = await CommentModel.find()
+            .sort({ createdAt: -1 })
             .limit(8)
-            .sort({ 'comments.createdAt': -1 })
+            .populate({
+                path: 'user',
+                model: 'User',
+                select: 'fullName avatarUrl',
+            })
             .exec();
 
-        const comments = posts
-            .map((obj) => obj.comments)
-            .flat()
-            .slice(0, 8);
-        res.json(comments);
+        res.json(allComments);
     } catch (error) {
         res.status(500).json({
             message: 'Failed to get all comments',
@@ -88,18 +83,33 @@ export const getOne = async (req, res) => {
         const postId = req.params.postId;
         // Мы получаем статью и обновляем ее счетчик просмотров,
         // если надо было просто получать статью, то можно было использовать просто .findOne or .findById
-        const updatedPost = await PostModel.findOneAndUpdate(
-            {
-                _id: postId,
-            },
+
+        // Получаем пост и популируем данные пользователя и комментарии
+        const post = await PostModel.findById(postId)
+            .populate('user', 'fullName avatarUrl')
+            .populate({
+                path: 'comments',
+                options: { sort: { createdAt: 1 } }, // Сортируем комментарии в каждом посте
+                populate: {
+                    path: 'user',
+                    model: 'User',
+                    select: 'fullName avatarUrl',
+                },
+            })
+            .exec();
+
+        // Увеличиваем счетчик просмотров
+        await PostModel.findByIdAndUpdate(
+            postId,
             {
                 $inc: { viewsCount: 1 },
             },
             {
                 new: true,
             }
-        ).populate('user');
-        res.json(updatedPost);
+        );
+
+        res.json(post);
     } catch (error) {
         console.log(error);
         res.status(500).json({
